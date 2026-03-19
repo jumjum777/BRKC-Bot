@@ -68,5 +68,9 @@ KNOWLEDGE_URLS = [
 AI_MODEL = "claude-haiku-4-5-20251001"
 AI_MAX_TOKENS = 1024
 
+# --- Cost Control ---
+# Monthly token cap (input + output combined). Default: 5,000,000
+MONTHLY_TOKEN_CAP = int(os.getenv("MONTHLY_TOKEN_CAP", "5000000"))
+
 # --- Knowledge refresh interval (seconds) ---
 KNOWLEDGE_REFRESH_INTERVAL = 86400  # Re-scrape once per day

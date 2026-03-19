@@ -4,7 +4,9 @@ Answers member questions using AI + scraped website content.
 """
 
 import asyncio
+import datetime
 import logging
+import pathlib
 import time
 from collections import defaultdict
 
@@ -31,6 +33,55 @@ knowledge = KnowledgeBase()
 
 # Rate limiting: {user_id: [timestamp, timestamp, ...]}
 user_requests: dict[int, list[float]] = defaultdict(list)
+
+
+# ===== Usage stats (in-memory, resets daily) =====
+class UsageStats:
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.questions_answered: int = 0
+        self.errors: int = 0
+        self.api_calls: int = 0
+        self.askers: dict[str, int] = defaultdict(int)
+        self.reset_time: float = time.time()
+
+    def record_question(self, author_name: str):
+        self.questions_answered += 1
+        self.askers[author_name] += 1
+
+    def record_error(self):
+        self.errors += 1
+
+    def record_api_call(self):
+        self.api_calls += 1
+
+    def top_askers(self, n: int = 5) -> list[tuple[str, int]]:
+        return sorted(self.askers.items(), key=lambda x: x[1], reverse=True)[:n]
+
+    def summary(self) -> str:
+        uptime = time.time() - self.reset_time
+        hours = int(uptime // 3600)
+        minutes = int((uptime % 3600) // 60)
+
+        lines = [
+            f"Questions answered: {self.questions_answered}",
+            f"Errors: {self.errors}",
+            f"API calls: {self.api_calls}",
+            f"Tracking period: {hours}h {minutes}m",
+        ]
+
+        top = self.top_askers()
+        if top:
+            lines.append("Top askers:")
+            for name, count in top:
+                lines.append(f"  {name}: {count}")
+
+        return "\n".join(lines)
+
+
+stats = UsageStats()
 
 
 def is_owner():
@@ -61,6 +112,8 @@ async def on_ready():
         logger.warning("No OWNER_ID set — owner commands won't work!")
     await knowledge.refresh()
     refresh_knowledge.start()
+    heartbeat.start()
+    daily_summary.start()
 
 
 @bot.event
@@ -79,10 +132,33 @@ async def on_member_join(member: discord.Member):
         )
 
 
+HEARTBEAT_FILE = pathlib.Path("/tmp/bot-healthy")
+
+
+@tasks.loop(seconds=30)
+async def heartbeat():
+    """Touch a file every 30s so Docker can verify the bot is alive."""
+    HEARTBEAT_FILE.touch()
+
+
 @tasks.loop(hours=24)
 async def refresh_knowledge():
     """Re-scrape websites once per day."""
     await knowledge.refresh()
+
+
+@tasks.loop(time=datetime.time(hour=0, minute=0, tzinfo=datetime.timezone.utc))
+async def daily_summary():
+    """DM the owner a daily stats summary at midnight UTC, then reset."""
+    if not OWNER_ID:
+        return
+    try:
+        owner = await bot.fetch_user(OWNER_ID)
+        if owner:
+            await owner.send(f"**Daily Bot Summary**\n```\n{stats.summary()}\n```")
+    except Exception as e:
+        logger.warning("Failed to send daily summary DM: %s", e)
+    stats.reset()
 
 
 # Keywords that suggest someone is asking about the club/karting
@@ -177,12 +253,19 @@ async def on_message(message: discord.Message):
 
     async with message.channel.typing():
         context = knowledge.get_context(question=question)
-        response = await asyncio.to_thread(
-            answer_question, question, context,
-            require_confidence=is_relevant and not is_direct,
-        )
+        stats.record_api_call()
+        try:
+            response = await asyncio.to_thread(
+                answer_question, question, context,
+                require_confidence=is_relevant and not is_direct,
+            )
+        except Exception:
+            stats.record_error()
+            logger.exception("Error answering question from %s", message.author)
+            return
 
     if response:
+        stats.record_question(message.author.display_name)
         await message.reply(response)
 
 
@@ -197,7 +280,15 @@ async def ask_command(ctx: commands.Context, *, question: str):
 
     async with ctx.typing():
         context = knowledge.get_context(question=question)
-        response = await asyncio.to_thread(answer_question, question, context)
+        stats.record_api_call()
+        try:
+            response = await asyncio.to_thread(answer_question, question, context)
+        except Exception:
+            stats.record_error()
+            logger.exception("Error answering !ask from %s", ctx.author)
+            await ctx.reply("Something went wrong. Try again in a moment.")
+            return
+    stats.record_question(ctx.author.display_name)
     await ctx.reply(response)
 
 
@@ -249,15 +340,80 @@ async def status_command(ctx: commands.Context, *, status: str):
     await ctx.message.delete()
 
 
+@bot.command(name="stats")
+@is_owner()
+async def stats_command(ctx: commands.Context):
+    """View current usage stats (owner only)."""
+    await ctx.reply(f"```\n{stats.summary()}\n```")
+
+
+# ===== Custom facts commands =====
+
+@bot.command(name="addfact")
+@is_owner()
+async def addfact_command(ctx: commands.Context, *, fact: str):
+    """Add a custom fact to the knowledge base. Usage: !addfact <fact>"""
+    num = knowledge.add_fact(fact)
+    await ctx.reply(f"Added fact #{num}: {fact}")
+
+
+@bot.command(name="removefact")
+@is_owner()
+async def removefact_command(ctx: commands.Context, number: int):
+    """Remove a custom fact by line number. Usage: !removefact <number>"""
+    try:
+        removed = knowledge.remove_fact(number)
+        await ctx.reply(f"Removed fact #{number}: {removed}")
+    except IndexError as e:
+        await ctx.reply(str(e))
+
+
+@bot.command(name="listfacts")
+@is_owner()
+async def listfacts_command(ctx: commands.Context):
+    """List all custom facts. Usage: !listfacts"""
+    facts = knowledge.list_facts()
+    if not facts:
+        await ctx.reply("No custom facts yet. Use `!addfact <fact>` to add one.")
+        return
+
+    lines = [f"**{num}.** {text}" for num, text in facts]
+    message = "**Custom Facts:**\n" + "\n".join(lines)
+
+    # Discord messages are capped at 2000 chars
+    if len(message) > 2000:
+        chunks = []
+        current = "**Custom Facts:**\n"
+        for line in lines:
+            if len(current) + len(line) + 1 > 2000:
+                chunks.append(current)
+                current = ""
+            current += line + "\n"
+        if current:
+            chunks.append(current)
+        for chunk in chunks:
+            await ctx.reply(chunk)
+    else:
+        await ctx.reply(message)
+
+
 # Error handler for owner-only commands
 @announce_command.error
 @say_command.error
 @dm_command.error
 @refresh_command.error
 @status_command.error
+@stats_command.error
+@addfact_command.error
+@removefact_command.error
+@listfacts_command.error
 async def owner_command_error(ctx: commands.Context, error):
     if isinstance(error, commands.CheckFailure):
         await ctx.reply("Only the bot owner can use that command.")
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.reply(f"Missing argument: `{error.param.name}`. Check `!help {ctx.command}` for usage.")
+    elif isinstance(error, commands.BadArgument):
+        await ctx.reply(f"Invalid argument. Check `!help {ctx.command}` for usage.")
 
 
 def main():

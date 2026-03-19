@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).parent.parent / "data"
 
 
+CUSTOM_FACTS_FILE = DATA_DIR / "custom_facts.txt"
+
+
 class KnowledgeBase:
     """Scrapes and stores website content for AI context."""
 
@@ -33,7 +36,46 @@ class KnowledgeBase:
         self.laptimes_by_driver: dict[str, str] = {}
         self.all_drivers: list[str] = []
         self.last_refresh: float = 0
+        self.custom_facts: list[str] = []
         self._load_race_data()
+        self._load_custom_facts()
+
+    # --- Custom facts management ---
+
+    def _load_custom_facts(self):
+        """Load custom facts from the text file."""
+        if CUSTOM_FACTS_FILE.exists():
+            lines = CUSTOM_FACTS_FILE.read_text(encoding="utf-8").strip().splitlines()
+            self.custom_facts = [line for line in lines if line.strip()]
+            logger.info("Loaded %d custom facts", len(self.custom_facts))
+        else:
+            self.custom_facts = []
+
+    def _save_custom_facts(self):
+        """Save custom facts to the text file."""
+        CUSTOM_FACTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        CUSTOM_FACTS_FILE.write_text(
+            "\n".join(self.custom_facts) + ("\n" if self.custom_facts else ""),
+            encoding="utf-8",
+        )
+
+    def add_fact(self, fact: str) -> int:
+        """Add a custom fact. Returns the line number (1-based)."""
+        self.custom_facts.append(fact.strip())
+        self._save_custom_facts()
+        return len(self.custom_facts)
+
+    def remove_fact(self, number: int) -> str:
+        """Remove a fact by 1-based line number. Returns the removed fact."""
+        if number < 1 or number > len(self.custom_facts):
+            raise IndexError(f"No fact at line {number}. Valid range: 1-{len(self.custom_facts)}")
+        removed = self.custom_facts.pop(number - 1)
+        self._save_custom_facts()
+        return removed
+
+    def list_facts(self) -> list[tuple[int, str]]:
+        """Return all facts as (number, text) tuples."""
+        return [(i + 1, fact) for i, fact in enumerate(self.custom_facts)]
 
     def _load_race_data(self):
         """Load race results and lap times, build summary and per-driver indexes."""
@@ -261,6 +303,13 @@ class KnowledgeBase:
     def get_context(self, question: str = "") -> str:
         """Build a context string. Only includes relevant pages to save tokens."""
         sections = []
+
+        # Custom facts first — these are owner-curated overrides/additions
+        if self.custom_facts:
+            facts_block = "=== CUSTOM FACTS (always treat as true) ===\n" + "\n".join(
+                f"- {fact}" for fact in self.custom_facts
+            )
+            sections.append(facts_block)
 
         # Smart page selection
         if self.pages:

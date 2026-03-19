@@ -1,10 +1,14 @@
 """Claude AI integration for answering kart club questions."""
 
+import json
 import logging
+import os
+from datetime import datetime, timezone
+from pathlib import Path
 
 import anthropic
 
-from .config import ANTHROPIC_API_KEY, AI_MODEL, AI_MAX_TOKENS
+from .config import ANTHROPIC_API_KEY, AI_MODEL, AI_MAX_TOKENS, MONTHLY_TOKEN_CAP
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +74,48 @@ def is_inappropriate(text: str) -> str | None:
 
     return None
 
+USAGE_FILE = Path(__file__).resolve().parent.parent / "data" / "usage.json"
+
+
+def _load_usage() -> dict:
+    """Load usage data from JSON file."""
+    if USAGE_FILE.exists():
+        try:
+            return json.loads(USAGE_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def _save_usage(data: dict) -> None:
+    """Save usage data to JSON file."""
+    USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    USAGE_FILE.write_text(json.dumps(data, indent=2))
+
+
+def _get_monthly_total() -> int:
+    """Sum input + output tokens for all days in the current month."""
+    data = _load_usage()
+    prefix = datetime.now(timezone.utc).strftime("%Y-%m")
+    total = 0
+    for date_key, day_data in data.items():
+        if date_key.startswith(prefix):
+            total += day_data.get("input_tokens", 0) + day_data.get("output_tokens", 0)
+    return total
+
+
+def _record_usage(input_tokens: int, output_tokens: int) -> None:
+    """Record token usage for today."""
+    data = _load_usage()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if today not in data:
+        data[today] = {"input_tokens": 0, "output_tokens": 0, "requests": 0}
+    data[today]["input_tokens"] += input_tokens
+    data[today]["output_tokens"] += output_tokens
+    data[today]["requests"] += 1
+    _save_usage(data)
+
+
 client = None
 
 
@@ -89,6 +135,10 @@ def answer_question(question: str, context: str, require_confidence: bool = Fals
     """
     if not ANTHROPIC_API_KEY:
         return "I'm not configured with an AI key yet. Please contact the bot admin."
+
+    # Check monthly token cap before using API
+    if MONTHLY_TOKEN_CAP > 0 and _get_monthly_total() >= MONTHLY_TOKEN_CAP:
+        return "I've reached my monthly usage limit. Contact the bot admin."
 
     # Check for obviously inappropriate messages before using API
     blocked = is_inappropriate(question)
@@ -119,6 +169,9 @@ def answer_question(question: str, context: str, require_confidence: bool = Fals
             system=SYSTEM_PROMPT.format(context=context),
             messages=messages,
         )
+        # Record token usage
+        _record_usage(message.usage.input_tokens, message.usage.output_tokens)
+
         response = message.content[0].text
 
         if require_confidence:

@@ -3,3 +3,9 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,time; assert time.time()-os.path.getmtime('/tmp/bot-healthy')<60"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
