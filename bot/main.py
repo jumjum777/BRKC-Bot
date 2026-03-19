@@ -206,6 +206,26 @@ def looks_like_question(text: str) -> bool:
     return any(kw in lower for kw in LISTEN_KEYWORDS)
 
 
+async def log_conversation(author: discord.User, question: str, response: str, source: str = "server"):
+    """DM the owner a log of each Q&A exchange."""
+    if not OWNER_ID:
+        return
+    # Don't log the owner's own questions back to them
+    if author.id == OWNER_ID:
+        return
+    try:
+        owner = await bot.fetch_user(OWNER_ID)
+        if owner:
+            log_msg = (
+                f"**[{source.upper()}]** {author.display_name} ({author})\n"
+                f"**Q:** {question[:500]}\n"
+                f"**A:** {response[:1000]}"
+            )
+            await owner.send(log_msg)
+    except Exception as e:
+        logger.warning("Failed to DM conversation log to owner: %s", e)
+
+
 @bot.event
 async def on_message(message: discord.Message):
     """Handle incoming messages."""
@@ -216,11 +236,43 @@ async def on_message(message: discord.Message):
 
     logger.debug("Message from %s: %s", message.author, message.content[:100])
 
-    # Process commands first
-    await bot.process_commands(message)
+    # Handle DMs
+    is_dm = isinstance(message.channel, discord.DMChannel)
+
+    # Process commands first (only works in guilds)
+    if not is_dm:
+        await bot.process_commands(message)
 
     # Skip if this was a command
     if message.content.startswith("!"):
+        return
+
+    if is_dm:
+        # Always respond to DMs
+        question = message.content.strip()
+        if not question:
+            return
+
+        # Rate limit (owner is exempt)
+        if message.author.id != OWNER_ID and not check_rate_limit(message.author.id):
+            await message.reply("Slow down! You can ask me 6 questions per minute. Try again shortly.")
+            return
+
+        async with message.channel.typing():
+            context = knowledge.get_context(question=question)
+            stats.record_api_call()
+            try:
+                response = await asyncio.to_thread(answer_question, question, context)
+            except Exception:
+                stats.record_error()
+                logger.exception("Error answering DM from %s", message.author)
+                await message.reply("Something went wrong. Try again in a moment.")
+                return
+
+        if response:
+            stats.record_question(message.author.display_name)
+            await message.reply(response)
+            await log_conversation(message.author, question, response, source="DM")
         return
 
     # Direct mention or reply to bot — always respond
@@ -267,6 +319,8 @@ async def on_message(message: discord.Message):
     if response:
         stats.record_question(message.author.display_name)
         await message.reply(response)
+        channel_name = getattr(message.channel, "name", "unknown")
+        await log_conversation(message.author, question, response, source=f"#{channel_name}")
 
 
 # ===== Regular commands =====
@@ -290,6 +344,8 @@ async def ask_command(ctx: commands.Context, *, question: str):
             return
     stats.record_question(ctx.author.display_name)
     await ctx.reply(response)
+    channel_name = getattr(ctx.channel, "name", "DM")
+    await log_conversation(ctx.author, question, response, source=f"!ask #{channel_name}")
 
 
 # ===== Owner-only commands =====
