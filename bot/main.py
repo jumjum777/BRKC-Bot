@@ -177,9 +177,13 @@ async def on_message(message: discord.Message):
 
     async with message.channel.typing():
         context = knowledge.get_context(question=question)
-        response = await asyncio.to_thread(answer_question, question, context)
+        response = await asyncio.to_thread(
+            answer_question, question, context,
+            require_confidence=is_relevant and not is_direct,
+        )
 
-    await message.reply(response)
+    if response:
+        await message.reply(response)
 
 
 # ===== Regular commands =====

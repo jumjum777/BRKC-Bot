@@ -81,8 +81,12 @@ def get_client() -> anthropic.Anthropic:
     return client
 
 
-def answer_question(question: str, context: str) -> str:
-    """Use Claude to answer a question using scraped website context."""
+def answer_question(question: str, context: str, require_confidence: bool = False) -> str | None:
+    """Use Claude to answer a question using scraped website context.
+
+    If require_confidence is True, asks Claude to rate confidence and
+    returns None if below threshold (7/10). Used for passive listening.
+    """
     if not ANTHROPIC_API_KEY:
         return "I'm not configured with an AI key yet. Please contact the bot admin."
 
@@ -93,13 +97,39 @@ def answer_question(question: str, context: str) -> str:
 
     try:
         ai = get_client()
+
+        if require_confidence:
+            conf_prompt = (
+                "First, rate your confidence (1-10) that you can give an accurate, "
+                "helpful answer to this question based on the data you have. "
+                "Reply in this exact format:\n"
+                "CONFIDENCE: <number>\n"
+                "ANSWER: <your answer>\n\n"
+                "If your confidence is below 7, just reply:\n"
+                "CONFIDENCE: <number>\n"
+                "ANSWER: SKIP"
+            )
+            messages = [{"role": "user", "content": f"{conf_prompt}\n\nQuestion: {question}"}]
+        else:
+            messages = [{"role": "user", "content": question}]
+
         message = ai.messages.create(
             model=AI_MODEL,
             max_tokens=AI_MAX_TOKENS,
             system=SYSTEM_PROMPT.format(context=context),
-            messages=[{"role": "user", "content": question}],
+            messages=messages,
         )
-        return message.content[0].text
+        response = message.content[0].text
+
+        if require_confidence:
+            if "CONFIDENCE:" in response and "ANSWER:" in response:
+                answer_part = response.split("ANSWER:", 1)[1].strip()
+                if answer_part == "SKIP":
+                    return None
+                return answer_part
+            return response
+
+        return response
 
     except anthropic.RateLimitError as e:
         logger.warning("Rate limit hit: %s", e)
