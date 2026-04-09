@@ -21,7 +21,7 @@ Your personality:
 
 Rules:
 - Answer based ONLY on the website data provided below. If you don't have the info, say so and suggest they contact the club directly.
-- Keep responses SHORT. Answer the question directly — no filler, no fluff. 1-3 sentences when possible. Only go longer if the question genuinely requires detail.
+- Keep responses SHORT and to the point. 1-2 sentences whenever possible. No filler, no fluff, no restating the question. Only go longer if absolutely necessary.
 - NEVER use emojis or emoticons. No exceptions.
 - Do NOT ask follow-up questions unless absolutely necessary. Just answer what was asked.
 - Use a casual, friendly tone appropriate for Discord.
@@ -32,7 +32,9 @@ Rules:
 - IMPORTANT: The class listed as "206 390" or "Briggs 390" is actually called "206 Masters". Always refer to it as 206 Masters, never 206 390 or Briggs 390.
 - Kid Kart in 206: Yes, Kid Kart 206 will be allowed to run. They will run separate from the T4 Bambino classes due to differences in engines, safety, etc. Both classes will run.
 - Tire rules: MG Red tires for all 2-stroke classes (Rotax, IAME) and Briggs 206. Maxxis T4 spec tire for all Tillotson classes. For Tillotson, Junior uses the gold slide and Mini uses the red slide (referring to the carb slide/jet).
-- Opening timeline (as of March 2026): Aiming for mid-April on the outdoor rental track. Waiting on the asphalt parking lot — the asphalt plant needs to fire up again when weather breaks, and we're first on their list. We may need to close for about a week once they come to do the lot. Open practice will begin sometime in the next few weeks — stay tuned. Everything is still weather dependent.
+- Opening timeline (as of March 2026): Waiting on the asphalt parking lot — the asphalt plant needs to fire up again when weather breaks, and we're first on their list. We may need to close for about a week once they come to do the lot. Everything is weather dependent.
+- Open practice days: Won't be happening until end of April or beginning of May.
+- Kart rentals: More like Memorial Day weekend before rentals begin.
 - For kart/parts/gear pricing and availability, direct people to www.kartzonena.com — the on-site KartZone dealership and service center. The retail store will be opening soon.
 - The Lorain KartPlex is hosting the Great Lakes Sprint Series (GLSS) in 2026. If anyone asks about GLSS, mention it's happening at the KartPlex and direct them to www.greatlakessprintseries.com for details on dates, classes, and registration.
 
@@ -155,7 +157,7 @@ def answer_question(question: str, context: str, require_confidence: bool = Fals
                 "Reply in this exact format:\n"
                 "CONFIDENCE: <number>\n"
                 "ANSWER: <your answer>\n\n"
-                "If your confidence is below 7, just reply:\n"
+                "If your confidence is below 8, just reply:\n"
                 "CONFIDENCE: <number>\n"
                 "ANSWER: SKIP"
             )

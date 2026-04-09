@@ -34,6 +34,10 @@ knowledge = KnowledgeBase()
 # Rate limiting: {user_id: [timestamp, timestamp, ...]}
 user_requests: dict[int, list[float]] = defaultdict(list)
 
+# Passive listening cooldown: {channel_id: last_passive_response_timestamp}
+passive_cooldowns: dict[int, float] = {}
+PASSIVE_COOLDOWN_SECONDS = 300  # Don't chime in again for 5 minutes after a passive answer
+
 
 # ===== Usage stats (in-memory, resets daily) =====
 class UsageStats:
@@ -189,17 +193,15 @@ LISTEN_KEYWORDS = [
 
 
 def looks_like_question(text: str) -> bool:
-    """Check if a message looks like a karting-related question worth answering."""
+    """Check if a message looks like a karting-related question worth answering.
+
+    Strict: must have a question mark AND a karting keyword. Statements
+    that just happen to mention karting don't trigger the bot.
+    """
     lower = text.lower()
 
-    # Must contain a question mark or question-like phrasing
-    is_question = (
-        "?" in text
-        or lower.startswith(("how", "what", "when", "where", "who", "why", "is there",
-                             "are there", "do you", "does", "can i", "can you",
-                             "anyone know", "anybody know", "do they", "is it"))
-    )
-    if not is_question:
+    # Must contain an actual question mark
+    if "?" not in text:
         return False
 
     # Must contain at least one karting-related keyword
@@ -292,6 +294,23 @@ async def on_message(message: discord.Message):
     if not is_direct and not is_relevant:
         return
 
+    # Skip passive responses if:
+    # 1. Message is a reply to another human (not the bot) — they're talking to each other
+    # 2. Channel is on cooldown from a recent passive answer
+    # 3. Message is too short to be a real question (reactions like "yeah", "nice", etc.)
+    if is_relevant and not is_direct:
+        # Skip replies to other humans
+        if message.reference and message.reference.resolved and message.reference.resolved.author != bot.user:
+            return
+        # Skip short messages (under 15 chars)
+        if len(message.content.strip()) < 15:
+            return
+        # Skip if channel is on passive cooldown
+        now = time.time()
+        last_passive = passive_cooldowns.get(message.channel.id, 0)
+        if now - last_passive < PASSIVE_COOLDOWN_SECONDS:
+            return
+
     # Rate limit (owner is exempt)
     if message.author.id != OWNER_ID and not check_rate_limit(message.author.id):
         if is_direct:
@@ -319,6 +338,9 @@ async def on_message(message: discord.Message):
     if response:
         stats.record_question(message.author.display_name)
         await message.reply(response)
+        # Set cooldown so bot doesn't keep chiming in on follow-up chatter
+        if is_relevant and not is_direct:
+            passive_cooldowns[message.channel.id] = time.time()
         channel_name = getattr(message.channel, "name", "unknown")
         await log_conversation(message.author, question, response, source=f"#{channel_name}")
 
