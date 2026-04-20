@@ -179,9 +179,15 @@ def answer_question(question: str, context: str, require_confidence: bool = Fals
         if require_confidence:
             if "CONFIDENCE:" in response and "ANSWER:" in response:
                 answer_part = response.split("ANSWER:", 1)[1].strip()
-                if answer_part == "SKIP":
+                if "SKIP" in answer_part.upper():
+                    return None
+                # Strip any leftover formatting
+                if answer_part.startswith("CONFIDENCE") or answer_part.startswith("ANSWER"):
                     return None
                 return answer_part
+            # Response didn't follow format — don't show raw confidence text
+            if "CONFIDENCE" in response.upper() or "SKIP" in response.upper():
+                return None
             return response
 
         return response
